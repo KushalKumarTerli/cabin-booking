@@ -1,13 +1,14 @@
-import { createFileRoute, Navigate } from "@tanstack/react-router";
+import { createFileRoute, Navigate, Outlet } from "@tanstack/react-router";
 import { useAuth } from "@/features/auth/AuthProvider";
+import { AppShell } from "@/components/layout/AppShell";
 import { Loader2 } from "lucide-react";
 
-export const Route = createFileRoute("/")({
-  component: Index,
+export const Route = createFileRoute("/_authenticated")({
+  component: AuthLayout,
 });
 
-function Index() {
-  const { user, loading, isAdmin } = useAuth();
+function AuthLayout() {
+  const { user, loading } = useAuth();
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -16,5 +17,5 @@ function Index() {
     );
   }
   if (!user) return <Navigate to="/login" />;
-  return <Navigate to={isAdmin ? "/admin" : "/dashboard"} />;
+  return <AppShell />;
 }
