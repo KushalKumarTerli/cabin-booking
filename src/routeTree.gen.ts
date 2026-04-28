@@ -20,6 +20,10 @@ import { Route as AuthenticatedBookRouteImport } from './routes/_authenticated/b
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/_admin'
 import { Route as AuthenticatedCabinsCabinIdRouteImport } from './routes/_authenticated/cabins.$cabinId'
 import { Route as AuthenticatedAdminAdminIndexRouteImport } from './routes/_authenticated/_admin/admin.index'
+import { Route as AuthenticatedAdminAdminUsersRouteImport } from './routes/_authenticated/_admin/admin.users'
+import { Route as AuthenticatedAdminAdminLogsRouteImport } from './routes/_authenticated/_admin/admin.logs'
+import { Route as AuthenticatedAdminAdminCabinsRouteImport } from './routes/_authenticated/_admin/admin.cabins'
+import { Route as AuthenticatedAdminAdminBookingsRouteImport } from './routes/_authenticated/_admin/admin.bookings'
 
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
@@ -76,6 +80,30 @@ const AuthenticatedAdminAdminIndexRoute =
     path: '/admin/',
     getParentRoute: () => AuthenticatedAdminRoute,
   } as any)
+const AuthenticatedAdminAdminUsersRoute =
+  AuthenticatedAdminAdminUsersRouteImport.update({
+    id: '/admin/users',
+    path: '/admin/users',
+    getParentRoute: () => AuthenticatedAdminRoute,
+  } as any)
+const AuthenticatedAdminAdminLogsRoute =
+  AuthenticatedAdminAdminLogsRouteImport.update({
+    id: '/admin/logs',
+    path: '/admin/logs',
+    getParentRoute: () => AuthenticatedAdminRoute,
+  } as any)
+const AuthenticatedAdminAdminCabinsRoute =
+  AuthenticatedAdminAdminCabinsRouteImport.update({
+    id: '/admin/cabins',
+    path: '/admin/cabins',
+    getParentRoute: () => AuthenticatedAdminRoute,
+  } as any)
+const AuthenticatedAdminAdminBookingsRoute =
+  AuthenticatedAdminAdminBookingsRouteImport.update({
+    id: '/admin/bookings',
+    path: '/admin/bookings',
+    getParentRoute: () => AuthenticatedAdminRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -86,6 +114,10 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/my-bookings': typeof AuthenticatedMyBookingsRoute
   '/cabins/$cabinId': typeof AuthenticatedCabinsCabinIdRoute
+  '/admin/bookings': typeof AuthenticatedAdminAdminBookingsRoute
+  '/admin/cabins': typeof AuthenticatedAdminAdminCabinsRoute
+  '/admin/logs': typeof AuthenticatedAdminAdminLogsRoute
+  '/admin/users': typeof AuthenticatedAdminAdminUsersRoute
   '/admin/': typeof AuthenticatedAdminAdminIndexRoute
 }
 export interface FileRoutesByTo {
@@ -97,6 +129,10 @@ export interface FileRoutesByTo {
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/my-bookings': typeof AuthenticatedMyBookingsRoute
   '/cabins/$cabinId': typeof AuthenticatedCabinsCabinIdRoute
+  '/admin/bookings': typeof AuthenticatedAdminAdminBookingsRoute
+  '/admin/cabins': typeof AuthenticatedAdminAdminCabinsRoute
+  '/admin/logs': typeof AuthenticatedAdminAdminLogsRoute
+  '/admin/users': typeof AuthenticatedAdminAdminUsersRoute
   '/admin': typeof AuthenticatedAdminAdminIndexRoute
 }
 export interface FileRoutesById {
@@ -111,6 +147,10 @@ export interface FileRoutesById {
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/my-bookings': typeof AuthenticatedMyBookingsRoute
   '/_authenticated/cabins/$cabinId': typeof AuthenticatedCabinsCabinIdRoute
+  '/_authenticated/_admin/admin/bookings': typeof AuthenticatedAdminAdminBookingsRoute
+  '/_authenticated/_admin/admin/cabins': typeof AuthenticatedAdminAdminCabinsRoute
+  '/_authenticated/_admin/admin/logs': typeof AuthenticatedAdminAdminLogsRoute
+  '/_authenticated/_admin/admin/users': typeof AuthenticatedAdminAdminUsersRoute
   '/_authenticated/_admin/admin/': typeof AuthenticatedAdminAdminIndexRoute
 }
 export interface FileRouteTypes {
@@ -124,6 +164,10 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/my-bookings'
     | '/cabins/$cabinId'
+    | '/admin/bookings'
+    | '/admin/cabins'
+    | '/admin/logs'
+    | '/admin/users'
     | '/admin/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -135,6 +179,10 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/my-bookings'
     | '/cabins/$cabinId'
+    | '/admin/bookings'
+    | '/admin/cabins'
+    | '/admin/logs'
+    | '/admin/users'
     | '/admin'
   id:
     | '__root__'
@@ -148,6 +196,10 @@ export interface FileRouteTypes {
     | '/_authenticated/dashboard'
     | '/_authenticated/my-bookings'
     | '/_authenticated/cabins/$cabinId'
+    | '/_authenticated/_admin/admin/bookings'
+    | '/_authenticated/_admin/admin/cabins'
+    | '/_authenticated/_admin/admin/logs'
+    | '/_authenticated/_admin/admin/users'
     | '/_authenticated/_admin/admin/'
   fileRoutesById: FileRoutesById
 }
@@ -238,14 +290,50 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAdminAdminIndexRouteImport
       parentRoute: typeof AuthenticatedAdminRoute
     }
+    '/_authenticated/_admin/admin/users': {
+      id: '/_authenticated/_admin/admin/users'
+      path: '/admin/users'
+      fullPath: '/admin/users'
+      preLoaderRoute: typeof AuthenticatedAdminAdminUsersRouteImport
+      parentRoute: typeof AuthenticatedAdminRoute
+    }
+    '/_authenticated/_admin/admin/logs': {
+      id: '/_authenticated/_admin/admin/logs'
+      path: '/admin/logs'
+      fullPath: '/admin/logs'
+      preLoaderRoute: typeof AuthenticatedAdminAdminLogsRouteImport
+      parentRoute: typeof AuthenticatedAdminRoute
+    }
+    '/_authenticated/_admin/admin/cabins': {
+      id: '/_authenticated/_admin/admin/cabins'
+      path: '/admin/cabins'
+      fullPath: '/admin/cabins'
+      preLoaderRoute: typeof AuthenticatedAdminAdminCabinsRouteImport
+      parentRoute: typeof AuthenticatedAdminRoute
+    }
+    '/_authenticated/_admin/admin/bookings': {
+      id: '/_authenticated/_admin/admin/bookings'
+      path: '/admin/bookings'
+      fullPath: '/admin/bookings'
+      preLoaderRoute: typeof AuthenticatedAdminAdminBookingsRouteImport
+      parentRoute: typeof AuthenticatedAdminRoute
+    }
   }
 }
 
 interface AuthenticatedAdminRouteChildren {
+  AuthenticatedAdminAdminBookingsRoute: typeof AuthenticatedAdminAdminBookingsRoute
+  AuthenticatedAdminAdminCabinsRoute: typeof AuthenticatedAdminAdminCabinsRoute
+  AuthenticatedAdminAdminLogsRoute: typeof AuthenticatedAdminAdminLogsRoute
+  AuthenticatedAdminAdminUsersRoute: typeof AuthenticatedAdminAdminUsersRoute
   AuthenticatedAdminAdminIndexRoute: typeof AuthenticatedAdminAdminIndexRoute
 }
 
 const AuthenticatedAdminRouteChildren: AuthenticatedAdminRouteChildren = {
+  AuthenticatedAdminAdminBookingsRoute: AuthenticatedAdminAdminBookingsRoute,
+  AuthenticatedAdminAdminCabinsRoute: AuthenticatedAdminAdminCabinsRoute,
+  AuthenticatedAdminAdminLogsRoute: AuthenticatedAdminAdminLogsRoute,
+  AuthenticatedAdminAdminUsersRoute: AuthenticatedAdminAdminUsersRoute,
   AuthenticatedAdminAdminIndexRoute: AuthenticatedAdminAdminIndexRoute,
 }
 
