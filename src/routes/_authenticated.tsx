@@ -17,9 +17,5 @@ function AuthLayout() {
     );
   }
   if (!user) return <Navigate to="/login" />;
-  return (
-    <AppShell>
-      <Outlet />
-    </AppShell>
-  );
+  return <AppShell />;
 }
