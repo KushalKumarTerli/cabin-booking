@@ -306,7 +306,7 @@ function AdminBookings() {
               </div>
 
               {!editFitsDay && (
-                <p className="text-sm text-destructive">End time exceeds 18:30 maximum.</p>
+                <p className="text-sm text-destructive">End time exceeds 19:00 maximum.</p>
               )}
 
               <div className="space-y-2">

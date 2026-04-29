@@ -17,9 +17,6 @@ import {
   todayISO,
   tomorrowISO,
   computeEndTime,
-  generateTimeSlots,
-  generateEndTimeSlots,
-  formatTime,
   formatTime12h,
   formatDuration,
   timeToMinutes,
@@ -32,6 +29,7 @@ import {
   LUNCH_START,
   LUNCH_END,
 } from "@/lib/booking-utils";
+import { TimePicker } from "@/components/ui/time-picker";
 
 const searchSchema = z.object({
   cabinId: z.string().optional(),
@@ -46,9 +44,6 @@ export const Route = createFileRoute("/_authenticated/book")({
 
 interface CabinRow { id: string; name: string; floor: string; wing: string | null; }
 interface BookingRow { cabin_id: string; start_time: string; end_time: string; status: string; }
-
-// Hourly quick-pick slots for start time
-const QUICK_START_SLOTS = generateTimeSlots().filter((s) => s.slice(3, 5) === "00");
 
 function BookPage() {
   const search = Route.useSearch();
@@ -118,7 +113,6 @@ function BookPage() {
 
   const autoEndTime = useMemo(() => computeEndTime(startTime, candidates), [startTime, candidates]);
   const endTime = manualEndTime ?? autoEndTime;
-  const endTimeSlots = useMemo(() => generateEndTimeSlots(startTime), [startTime]);
   const endMin = timeToMinutes(endTime);
   const fitsDay = endMin <= timeToMinutes(WORKING_END_EXTENDED);
 
@@ -126,17 +120,6 @@ function BookPage() {
   const maxCandidates = Math.max(1, Math.floor(
     (timeToMinutes(WORKING_END_EXTENDED) - timeToMinutes(startTime)) / SLOT_MINUTES,
   ));
-
-  // Quick end-time suggestions: auto + every 30 min after (up to 4 options)
-  const quickEndSlots = useMemo(() => {
-    const autoMin = timeToMinutes(autoEndTime);
-    return endTimeSlots
-      .filter((s) => {
-        const d = timeToMinutes(s) - autoMin;
-        return d === 0 || (d > 0 && d % 30 === 0);
-      })
-      .slice(0, 5);
-  }, [endTimeSlots, autoEndTime]);
 
   // Reset manual end when start or candidates change
   useEffect(() => { setManualEndTime(null); }, [startTime, candidates]);
@@ -207,7 +190,7 @@ function BookPage() {
       <div>
         <h1 className="text-2xl font-bold">Book a Cabin</h1>
         <p className="text-sm text-muted-foreground">
-          45 min per candidate · 09:00–18:00 standard · 18:30 extended · Lunch 13:00–14:00
+          45 min per candidate · 09:00–19:00 · Lunch 13:00–14:00
         </p>
       </div>
 
@@ -322,85 +305,41 @@ function BookPage() {
                   <p className="text-xs text-muted-foreground">{candidates} × 45 min = {formatDuration(candidates * SLOT_MINUTES)}</p>
                 </div>
 
-                {/* Start time — manual input with quick slots */}
+                {/* Start time */}
                 <div className="space-y-2">
                   <Label>Start Time</Label>
-                  <Input
-                    type="time"
-                    min="09:00"
-                    max="17:45"
-                    value={startTime.slice(0, 5)}
-                    onChange={(e) => { if (e.target.value) setStartTime(`${e.target.value}:00`); }}
-                    className="h-9"
+                  <TimePicker
+                    value={startTime}
+                    onChange={setStartTime}
                   />
-                  <div className="flex flex-wrap gap-1">
-                    {QUICK_START_SLOTS.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-                          startTime === s
-                            ? "bg-primary text-primary-foreground border-primary"
-                            : "bg-background hover:bg-muted border-border text-foreground"
-                        }`}
-                        onClick={() => setStartTime(s)}
-                      >
-                        {formatTime(s)}
-                      </button>
-                    ))}
-                  </div>
                 </div>
 
-                {/* End time — manual input with auto suggestion */}
+                {/* End time */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between h-4">
                     <Label>End Time</Label>
                     {manualEndTime && (
                       <button
                         type="button"
-                        className="text-xs text-primary hover:underline leading-none"
+                        className="text-xs text-sky-600 hover:underline leading-none"
                         onClick={() => setManualEndTime(null)}
                       >
                         Reset to auto
                       </button>
                     )}
                   </div>
-                  <Input
-                    type="time"
-                    min={autoEndTime.slice(0, 5)}
-                    max="18:30"
-                    value={endTime.slice(0, 5)}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (!val) return;
-                      const newEnd = `${val}:00`;
-                      setManualEndTime(newEnd === autoEndTime ? null : newEnd);
-                    }}
-                    className={`h-9 ${manualEndTime ? "border-primary ring-1 ring-primary" : ""}`}
+                  <TimePicker
+                    value={endTime}
+                    onChange={(v) => setManualEndTime(v === autoEndTime ? null : v)}
+                    highlighted={!!manualEndTime}
                   />
-                  <div className="flex flex-wrap gap-1">
-                    {quickEndSlots.map((s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-                          endTime === s
-                            ? "bg-primary text-primary-foreground border-primary"
-                            : "bg-background hover:bg-muted border-border text-foreground"
-                        }`}
-                        onClick={() => setManualEndTime(s === autoEndTime ? null : s)}
-                      >
-                        {formatTime(s)}{s === autoEndTime ? " ★" : ""}
-                      </button>
-                    ))}
-                  </div>
                 </div>
               </div>
 
               {/* Validation alerts */}
               {!fitsDay && (
                 <Alert icon={<AlertCircle className="h-4 w-4" />} variant="error">
-                  End time exceeds 18:30. Reduce candidates or choose an earlier start.
+                  End time exceeds 19:00. Reduce candidates or choose an earlier start.
                 </Alert>
               )}
               {!validStart && (
@@ -507,7 +446,7 @@ function BookPage() {
               <div className="space-y-1 pt-1">
                 <ChecklistItem ok={!!cabinId} label="Cabin selected" />
                 <ChecklistItem ok={!!purpose.trim()} label="Purpose provided" />
-                <ChecklistItem ok={fitsDay} label="Within 09:00–18:30" />
+                <ChecklistItem ok={fitsDay} label="Within 09:00–19:00" />
                 <ChecklistItem ok={validStart} label="Valid start time" />
                 <ChecklistItem ok={!lunchOverlap} label="No lunch conflict" />
               </div>

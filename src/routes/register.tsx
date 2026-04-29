@@ -9,7 +9,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Building, Loader2 } from "lucide-react";
-import { verifyAdminCode } from "@/features/auth/admin-code.functions";
+import { elevateUserToAdmin, verifyAdminCode } from "@/features/auth/admin-code.functions";
 import { DEPARTMENTS } from "@/lib/booking-utils";
 
 export const Route = createFileRoute("/register")({
@@ -62,7 +62,7 @@ function RegisterPage() {
           full_name: form.full_name,
           employee_id: form.employee_id,
           department: form.department || "",
-          role: form.role,
+          role: "manager",
         },
       },
     });
@@ -79,6 +79,14 @@ function RegisterPage() {
     }
 
     setLoading(false);
+
+    if (data.user && isAdmin) {
+      const elevated = await elevateUserToAdmin({ data: { userId: data.user.id, code: form.admin_code } });
+      if (!elevated.valid) {
+        toast.error("Could not complete admin registration.");
+        return;
+      }
+    }
 
     if (data.user) {
       toast.success("Account created! Please sign in to continue.");

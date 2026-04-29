@@ -1,6 +1,6 @@
 export const WORKING_START = "09:00";
-export const WORKING_END = "18:00";
-export const WORKING_END_EXTENDED = "18:30";
+export const WORKING_END = "19:00";
+export const WORKING_END_EXTENDED = "19:00";
 export const LUNCH_START = "13:00";
 export const LUNCH_END = "14:00";
 export const SLOT_MINUTES = 45;
@@ -66,7 +66,7 @@ export function nowRoundedTo15(): string {
   return minutesToTime(Math.max(rounded, timeToMinutes(WORKING_START)));
 }
 
-// Start time slots: 09:00 – 17:45 (last valid start for 1 candidate ending by 18:30)
+// Start time slots: 09:00 – 18:15 (last valid start for 1 candidate ending by 19:00)
 export function generateTimeSlots(): string[] {
   const slots: string[] = [];
   const maxStart = timeToMinutes(WORKING_END_EXTENDED) - SLOT_MINUTES;
@@ -76,7 +76,7 @@ export function generateTimeSlots(): string[] {
   return slots;
 }
 
-// End time slots relative to a given start time, up to 18:30
+// End time slots relative to a given start time, up to 19:00
 export function generateEndTimeSlots(startTime: string): string[] {
   const slots: string[] = [];
   for (let m = timeToMinutes(startTime) + 15; m <= timeToMinutes(WORKING_END_EXTENDED); m += 15) {

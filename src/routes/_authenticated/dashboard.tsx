@@ -19,7 +19,7 @@ import {
   WORKING_START,
   timeToMinutes,
 } from "@/lib/booking-utils";
-import { Building2, ArrowRight, Calendar, Clock, Users, Filter, RefreshCw } from "lucide-react";
+import { Building2, ArrowRight, Filter, RefreshCw } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   component: Dashboard,
@@ -275,12 +275,19 @@ function Dashboard() {
                   const current = day === "today" ? getCurrentBooking(cBkgs, nowTime) : null;
                   const isOccupied = !!current;
                   const nextSlot = findNextFreeSlot(cBkgs, day === "today" ? nowTime : `${WORKING_START}:00`);
+                  // First future booking when cabin is not currently occupied
+                  const upcomingBooking = current ? null : (
+                    cBkgs
+                      .filter((b) => day === "today" ? timeToMinutes(b.start_time) > nowMin : true)
+                      .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time))[0] ?? null
+                  );
                   return (
                     <CabinCard
                       key={cabin.id}
                       cabin={cabin}
                       current={current}
                       isOccupied={isOccupied}
+                      upcomingBooking={upcomingBooking}
                       nextSlot={nextSlot}
                       date={date}
                       day={day}
@@ -301,26 +308,34 @@ interface CabinCardProps {
   cabin: CabinRow;
   current: BookingRow | null;
   isOccupied: boolean;
+  upcomingBooking: BookingRow | null;
   nextSlot: string | null;
   date: string;
   day: "today" | "tomorrow";
   nowTime: string;
 }
 
-function CabinCard({ cabin, current, isOccupied, nextSlot, date, day }: CabinCardProps) {
-  const durationMin = current
-    ? timeToMinutes(current.end_time) - timeToMinutes(current.start_time)
+function CabinCard({ cabin, current, isOccupied, upcomingBooking, nextSlot, date, day }: CabinCardProps) {
+  const activeBkg = current ?? upcomingBooking;
+
+  const durationMin = activeBkg
+    ? timeToMinutes(activeBkg.end_time) - timeToMinutes(activeBkg.start_time)
     : 0;
 
-  // Most accurate "next available at" — accounts for back-to-back bookings
-  const nextAvailableAt = nextSlot
-    ? formatTime12h(`${nextSlot}:00`)
-    : current
-      ? formatTime12h(current.end_time)
+  const nextAvailableAt = activeBkg
+    ? formatTime12h(activeBkg.end_time)
+    : nextSlot
+      ? formatTime12h(`${nextSlot}:00`)
       : null;
 
+  const cardBorderCls = isOccupied
+    ? ""
+    : upcomingBooking
+      ? "border-amber-200"
+      : "border-success/20";
+
   return (
-    <Card className={`overflow-hidden transition-shadow hover:shadow-md ${isOccupied ? "" : "border-success/20"}`}>
+    <Card className={`overflow-hidden transition-shadow hover:shadow-md ${cardBorderCls}`}>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
@@ -336,6 +351,10 @@ function CabinCard({ cabin, current, isOccupied, nextSlot, date, day }: CabinCar
             <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200 shrink-0">
               In Use
             </Badge>
+          ) : upcomingBooking ? (
+            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 shrink-0">
+              Booked
+            </Badge>
           ) : (
             <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 shrink-0">
               Available
@@ -343,48 +362,61 @@ function CabinCard({ cabin, current, isOccupied, nextSlot, date, day }: CabinCar
           )}
         </div>
       </CardHeader>
+
       <CardContent className="space-y-3">
+
+        {/* ── In Use (today, currently occupied) ── */}
         {isOccupied && current ? (
-          <div className="rounded-md bg-orange-50 border border-orange-100 p-3 text-sm space-y-2">
-            {/* Booked By */}
-            <div>
-              <div className="text-xs text-orange-500 uppercase tracking-wide font-medium mb-0.5">Booked By</div>
-              <div className="font-semibold text-orange-900 truncate">{current.profiles?.full_name ?? "—"}</div>
-              {current.profiles?.department && (
-                <div className="text-xs text-orange-700 mt-0.5">{current.profiles.department}</div>
-              )}
-            </div>
-            {/* Time + Duration */}
-            <div className="pt-1.5 border-t border-orange-200 space-y-1">
-              <div className="flex items-center gap-1.5 text-xs text-orange-700">
-                <Clock className="h-3 w-3 shrink-0" />
-                <span className="font-medium">{formatTime12h(current.start_time)}</span>
-                <span className="text-orange-400">→</span>
-                <span className="font-medium">{formatTime12h(current.end_time)}</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-xs text-orange-700">
-                <Users className="h-3 w-3 shrink-0" />
-                <span>{current.candidate_count} candidate(s) · {formatDuration(durationMin)}</span>
-              </div>
-            </div>
-            {/* Next Available */}
+          <div className="rounded-md bg-orange-50 border border-orange-100 px-3 py-2.5 space-y-1.5">
+            <p className="text-sm font-semibold text-orange-900 truncate">
+              {current.profiles?.full_name ?? "—"}
+              <span className="text-orange-400 mx-1.5 font-normal">:</span>
+              <span className="font-medium text-orange-700">
+                {formatTime12h(current.start_time)} – {formatTime12h(current.end_time)}
+              </span>
+            </p>
+            <p className="text-xs text-orange-700">
+              {current.candidate_count} candidate(s) . {formatDuration(durationMin)}
+            </p>
             {nextAvailableAt && (
-              <div className="flex items-center gap-1.5 text-xs font-medium text-orange-800 pt-1.5 border-t border-orange-200">
-                <Calendar className="h-3 w-3 shrink-0" />
-                Next Available At: <span className="font-semibold">{nextAvailableAt}</span>
-              </div>
+              <p className="text-xs text-orange-800">
+                <span className="font-medium">Next Free At</span>
+                <span className="mx-1 text-orange-400">:</span>
+                <span className="font-semibold">{nextAvailableAt}</span>
+              </p>
             )}
           </div>
+
+        /* ── Booked (upcoming / tomorrow) ── */
+        ) : upcomingBooking ? (
+          <div className="rounded-md bg-amber-50 border border-amber-100 px-3 py-2.5 space-y-1.5">
+            <p className="text-sm font-semibold text-amber-900 truncate">
+              {upcomingBooking.profiles?.full_name ?? "—"}
+              <span className="text-amber-400 mx-1.5 font-normal">:</span>
+              <span className="font-medium text-amber-700">
+                {formatTime12h(upcomingBooking.start_time)} – {formatTime12h(upcomingBooking.end_time)}
+              </span>
+            </p>
+            <p className="text-xs text-amber-700">
+              {upcomingBooking.candidate_count} candidate(s) . {formatDuration(durationMin)}
+            </p>
+            {nextAvailableAt && (
+              <p className="text-xs text-amber-800">
+                <span className="font-medium">Next Free At</span>
+                <span className="mx-1 text-amber-400">:</span>
+                <span className="font-semibold">{nextAvailableAt}</span>
+              </p>
+            )}
+          </div>
+
+        /* ── Available ── */
         ) : (
-          <div className="rounded-md bg-green-50 border border-green-100 p-3 text-sm space-y-1">
-            <div className="text-xs font-semibold text-green-700 uppercase tracking-wide">Free Now</div>
-            <div className="flex items-center gap-1.5 text-xs text-green-700">
-              <Calendar className="h-3 w-3 shrink-0" />
-              Available: <span className="font-semibold">{day === "today" ? "Now" : "9:00 AM"}</span>
-            </div>
+          <div className="rounded-md bg-green-50 border border-green-100 px-3 py-2.5">
+            <p className="text-sm font-semibold text-green-800">
+              {day === "today" ? "Available now" : "All day available"}
+            </p>
           </div>
         )}
-
 
         <div className="flex gap-2 pt-1">
           <Button asChild size="sm" variant="outline" className="flex-1">
@@ -402,3 +434,4 @@ function CabinCard({ cabin, current, isOccupied, nextSlot, date, day }: CabinCar
     </Card>
   );
 }
+
