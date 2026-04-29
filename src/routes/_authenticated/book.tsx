@@ -12,17 +12,25 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
-import { Loader2, CheckCircle2 } from "lucide-react";
+import { Loader2, CheckCircle2, Pencil, X, AlertCircle, Clock } from "lucide-react";
 import {
   todayISO,
   tomorrowISO,
   computeEndTime,
   generateTimeSlots,
+  generateEndTimeSlots,
   formatTime,
+  formatTime12h,
+  formatDuration,
   timeToMinutes,
-  WORKING_END,
+  WORKING_END_EXTENDED,
+  overlapsLunch,
+  getSuggestedSlotAroundLunch,
   nowRoundedTo15,
   SLOT_MINUTES,
+  DEPARTMENTS,
+  LUNCH_START,
+  LUNCH_END,
 } from "@/lib/booking-utils";
 
 const searchSchema = z.object({
@@ -36,8 +44,11 @@ export const Route = createFileRoute("/_authenticated/book")({
   component: BookPage,
 });
 
-interface CabinRow { id: string; name: string; floor: string; wing: string | null; capacity: number; }
+interface CabinRow { id: string; name: string; floor: string; wing: string | null; }
 interface BookingRow { cabin_id: string; start_time: string; end_time: string; status: string; }
+
+// Hourly quick-pick slots for start time
+const QUICK_START_SLOTS = generateTimeSlots().filter((s) => s.slice(3, 5) === "00");
 
 function BookPage() {
   const search = Route.useSearch();
@@ -45,7 +56,9 @@ function BookPage() {
   const qc = useQueryClient();
   const { user, profile } = useAuth();
 
-  const [date, setDate] = useState<"today" | "tomorrow">(search.date === tomorrowISO() ? "tomorrow" : "today");
+  const [date, setDate] = useState<"today" | "tomorrow">(
+    search.date === tomorrowISO() ? "tomorrow" : "today",
+  );
   const dateStr = date === "today" ? todayISO() : tomorrowISO();
 
   const [candidates, setCandidates] = useState(1);
@@ -53,17 +66,38 @@ function BookPage() {
     if (search.start) return search.start.length === 5 ? `${search.start}:00` : search.start;
     return date === "today" ? nowRoundedTo15() : "09:00:00";
   });
+  const [manualEndTime, setManualEndTime] = useState<string | null>(null);
   const [cabinId, setCabinId] = useState<string>(search.cabinId ?? "");
   const [purpose, setPurpose] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Editable profile overrides (local display only)
+  const [editField, setEditField] = useState<"name" | "employeeId" | "department" | null>(null);
+  const [overrideName, setOverrideName] = useState("");
+  const [overrideEmployeeId, setOverrideEmployeeId] = useState("");
+  const [overrideDepartment, setOverrideDepartment] = useState("");
+
+  useEffect(() => {
+    if (profile) {
+      setOverrideName(profile.full_name);
+      setOverrideEmployeeId(profile.employee_id);
+      setOverrideDepartment(profile.department);
+    }
+  }, [profile]);
+
   const cabinsQ = useQuery({
     queryKey: ["cabins", "active"],
     queryFn: async () => {
-      const { data, error } = await supabase.from("cabins").select("*").eq("is_active", true).order("floor").order("name");
+      const { data, error } = await supabase
+        .from("cabins")
+        .select("id, name, floor, wing")
+        .eq("is_active", true)
+        .order("floor")
+        .order("name");
       if (error) throw error;
       return data as CabinRow[];
     },
+    staleTime: 30_000,
   });
 
   const bookingsQ = useQuery({
@@ -77,19 +111,45 @@ function BookPage() {
       if (error) throw error;
       return data as BookingRow[];
     },
+    staleTime: 0,
+    refetchInterval: 15_000,
+    refetchOnMount: "always",
   });
 
-  const slots = useMemo(() => generateTimeSlots(), []);
-  const endTime = useMemo(() => computeEndTime(startTime, candidates), [startTime, candidates]);
+  const autoEndTime = useMemo(() => computeEndTime(startTime, candidates), [startTime, candidates]);
+  const endTime = manualEndTime ?? autoEndTime;
+  const endTimeSlots = useMemo(() => generateEndTimeSlots(startTime), [startTime]);
   const endMin = timeToMinutes(endTime);
-  const fitsDay = endMin <= timeToMinutes(WORKING_END);
+  const fitsDay = endMin <= timeToMinutes(WORKING_END_EXTENDED);
 
-  const nowMin = (() => {
-    const n = new Date();
-    return n.getHours() * 60 + n.getMinutes();
-  })();
+  // Max candidates that fit within the extended workday from start time
+  const maxCandidates = Math.max(1, Math.floor(
+    (timeToMinutes(WORKING_END_EXTENDED) - timeToMinutes(startTime)) / SLOT_MINUTES,
+  ));
 
+  // Quick end-time suggestions: auto + every 30 min after (up to 4 options)
+  const quickEndSlots = useMemo(() => {
+    const autoMin = timeToMinutes(autoEndTime);
+    return endTimeSlots
+      .filter((s) => {
+        const d = timeToMinutes(s) - autoMin;
+        return d === 0 || (d > 0 && d % 30 === 0);
+      })
+      .slice(0, 5);
+  }, [endTimeSlots, autoEndTime]);
+
+  // Reset manual end when start or candidates change
+  useEffect(() => { setManualEndTime(null); }, [startTime, candidates]);
+
+  // Clamp candidates when start time changes
+  useEffect(() => {
+    if (candidates > maxCandidates) setCandidates(maxCandidates);
+  }, [startTime]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const nowMin = (() => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); })();
   const validStart = date === "tomorrow" || timeToMinutes(startTime) >= nowMin;
+  const lunchOverlap = fitsDay && overlapsLunch(startTime, endTime);
+  const lunchSuggestion = lunchOverlap ? getSuggestedSlotAroundLunch(candidates) : null;
 
   const availableCabins = useMemo(() => {
     const cabins = cabinsQ.data ?? [];
@@ -97,33 +157,25 @@ function BookPage() {
     const reqStart = timeToMinutes(startTime);
     const reqEnd = endMin;
     return cabins.filter((c) => {
-      const conflicts = bks.filter((b) => b.cabin_id === c.id).some((b) => {
+      return !bks.filter((b) => b.cabin_id === c.id).some((b) => {
         const s = timeToMinutes(b.start_time);
         const e = timeToMinutes(b.end_time);
         return reqStart < e && s < reqEnd;
       });
-      return !conflicts;
     });
   }, [cabinsQ.data, bookingsQ.data, startTime, endMin]);
 
-  // clamp candidates to fit working day
+  // Clear cabin selection if it becomes unavailable
   useEffect(() => {
-    const maxCandidates = Math.floor((timeToMinutes(WORKING_END) - timeToMinutes(startTime)) / SLOT_MINUTES);
-    if (maxCandidates < 1) return;
-    if (candidates > maxCandidates) setCandidates(maxCandidates);
-  }, [startTime, candidates]);
-
-  // clear selected cabin if it becomes unavailable
-  useEffect(() => {
-    if (cabinId && !availableCabins.find((c) => c.id === cabinId)) {
-      setCabinId("");
-    }
+    if (cabinId && !availableCabins.find((c) => c.id === cabinId)) setCabinId("");
   }, [availableCabins, cabinId]);
 
   const selectedCabin = availableCabins.find((c) => c.id === cabinId);
+  const isFormValid = !!cabinId && !!purpose.trim() && fitsDay && validStart && !lunchOverlap;
+  const durationMin = timeToMinutes(endTime) - timeToMinutes(startTime);
 
   const submit = async () => {
-    if (!user || !cabinId || !purpose.trim() || !fitsDay || !validStart) return;
+    if (!user || !isFormValid) return;
     setSubmitting(true);
     const { error } = await supabase.from("bookings").insert({
       user_id: user.id,
@@ -144,102 +196,408 @@ function BookPage() {
       qc.invalidateQueries({ queryKey: ["bookings"] });
       return;
     }
-    toast.success("Booking confirmed");
-    qc.invalidateQueries({ queryKey: ["bookings"] });
+    toast.success("Booking confirmed!");
+    // Invalidate all booking-related queries so dashboard reflects the new booking instantly
+    await qc.invalidateQueries({ queryKey: ["bookings"] });
     navigate({ to: "/my-bookings" });
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    <div className="max-w-7xl mx-auto space-y-4">
       <div>
-        <h1 className="text-2xl font-bold">Book a cabin</h1>
-        <p className="text-sm text-muted-foreground">45 minutes per candidate · 09:00–18:00</p>
+        <h1 className="text-2xl font-bold">Book a Cabin</h1>
+        <p className="text-sm text-muted-foreground">
+          45 min per candidate · 09:00–18:00 standard · 18:30 extended · Lunch 13:00–14:00
+        </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Booking details</CardTitle>
-          <CardDescription>Manager info is auto-filled from your profile.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-            <div className="space-y-1"><Label className="text-xs">Manager</Label><div className="font-medium">{profile?.full_name}</div></div>
-            <div className="space-y-1"><Label className="text-xs">Employee ID</Label><div className="font-medium">{profile?.employee_id}</div></div>
-            <div className="space-y-1"><Label className="text-xs">Department</Label><div className="font-medium">{profile?.department}</div></div>
-          </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        {/* ── Left: form ─────────────────────────────────────────── */}
+        <div className="lg:col-span-2 space-y-4">
 
-          <div className="space-y-2">
-            <Label>Date</Label>
-            <RadioGroup value={date} onValueChange={(v) => setDate(v as "today" | "tomorrow")} className="flex gap-6">
-              <div className="flex items-center gap-2"><RadioGroupItem id="d-today" value="today" /><Label htmlFor="d-today" className="font-normal">Today ({todayISO()})</Label></div>
-              <div className="flex items-center gap-2"><RadioGroupItem id="d-tomorrow" value="tomorrow" /><Label htmlFor="d-tomorrow" className="font-normal">Tomorrow ({tomorrowISO()})</Label></div>
-            </RadioGroup>
-          </div>
+          {/* Manager Details */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Manager Details</CardTitle>
+              <CardDescription>Auto-filled from your profile — click pencil to edit.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <EditableTextField
+                label="Manager Name"
+                value={overrideName}
+                isEditing={editField === "name"}
+                onEdit={() => setEditField("name")}
+                onSave={() => setEditField(null)}
+                onCancel={() => { setEditField(null); setOverrideName(profile?.full_name ?? ""); }}
+                onChange={setOverrideName}
+              />
+              <EditableTextField
+                label="Employee ID"
+                value={overrideEmployeeId}
+                isEditing={editField === "employeeId"}
+                onEdit={() => setEditField("employeeId")}
+                onSave={() => setEditField(null)}
+                onCancel={() => { setEditField(null); setOverrideEmployeeId(profile?.employee_id ?? ""); }}
+                onChange={setOverrideEmployeeId}
+              />
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs text-muted-foreground">Department</Label>
+                  {editField !== "department" ? (
+                    <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditField("department")}>
+                      <Pencil className="h-3 w-3" />
+                    </Button>
+                  ) : (
+                    <div className="flex gap-1">
+                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditField(null)}>
+                        <CheckCircle2 className="h-3 w-3 text-green-600" />
+                      </Button>
+                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={() => { setEditField(null); setOverrideDepartment(profile?.department ?? ""); }}>
+                        <X className="h-3 w-3 text-destructive" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                {editField === "department" ? (
+                  <Select value={overrideDepartment} onValueChange={setOverrideDepartment}>
+                    <SelectTrigger className="h-8"><SelectValue placeholder="Select department" /></SelectTrigger>
+                    <SelectContent>
+                      {DEPARTMENTS.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="text-sm font-medium">{overrideDepartment || <span className="text-muted-foreground">—</span>}</div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="space-y-2">
-              <Label>Candidates</Label>
-              <Input type="number" min={1} max={12} value={candidates} onChange={(e) => setCandidates(Math.max(1, parseInt(e.target.value || "1", 10)))} />
-            </div>
-            <div className="space-y-2">
-              <Label>Start time</Label>
-              <Select value={startTime} onValueChange={setStartTime}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent className="max-h-72">
-                  {slots.map((s) => (
-                    <SelectItem key={s} value={s}>{formatTime(s)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>End time</Label>
-              <Input value={formatTime(endTime)} readOnly className="bg-muted" />
-            </div>
-          </div>
+          {/* Booking Details */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Booking Details</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label>Date</Label>
+                <RadioGroup value={date} onValueChange={(v) => setDate(v as "today" | "tomorrow")} className="flex gap-6">
+                  <div className="flex items-center gap-2">
+                    <RadioGroupItem id="d-today" value="today" />
+                    <Label htmlFor="d-today" className="font-normal cursor-pointer">Today ({todayISO()})</Label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <RadioGroupItem id="d-tomorrow" value="tomorrow" />
+                    <Label htmlFor="d-tomorrow" className="font-normal cursor-pointer">Tomorrow ({tomorrowISO()})</Label>
+                  </div>
+                </RadioGroup>
+              </div>
 
-          {!fitsDay && <p className="text-sm text-destructive">End time exceeds 18:00. Reduce candidates or pick an earlier start.</p>}
-          {!validStart && <p className="text-sm text-destructive">Start time must be in the future.</p>}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {/* Candidate count */}
+                <div className="space-y-2">
+                  <Label>Candidate Count</Label>
+                  <div className="flex items-center">
+                    <Button
+                      type="button" variant="outline" size="icon"
+                      className="h-9 w-9 rounded-r-none shrink-0"
+                      onClick={() => setCandidates((c) => Math.max(1, c - 1))}
+                      disabled={candidates <= 1}
+                    >−</Button>
+                    <Input
+                      type="number" min={1} max={maxCandidates}
+                      value={candidates}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        if (!isNaN(v) && v >= 1 && v <= maxCandidates) setCandidates(v);
+                      }}
+                      className="h-9 w-14 rounded-none text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                    <Button
+                      type="button" variant="outline" size="icon"
+                      className="h-9 w-9 rounded-l-none shrink-0"
+                      onClick={() => setCandidates((c) => Math.min(maxCandidates, c + 1))}
+                      disabled={candidates >= maxCandidates}
+                    >+</Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{candidates} × 45 min = {formatDuration(candidates * SLOT_MINUTES)}</p>
+                </div>
 
-          <div className="space-y-2">
-            <Label>Cabin (only available cabins shown)</Label>
-            <Select value={cabinId} onValueChange={setCabinId}>
-              <SelectTrigger><SelectValue placeholder={availableCabins.length === 0 ? "No cabins available for this slot" : "Select a cabin"} /></SelectTrigger>
-              <SelectContent>
-                {availableCabins.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name} · {c.floor}{c.wing ? ` (${c.wing})` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+                {/* Start time — manual input with quick slots */}
+                <div className="space-y-2">
+                  <Label>Start Time</Label>
+                  <Input
+                    type="time"
+                    min="09:00"
+                    max="17:45"
+                    value={startTime.slice(0, 5)}
+                    onChange={(e) => { if (e.target.value) setStartTime(`${e.target.value}:00`); }}
+                    className="h-9"
+                  />
+                  <div className="flex flex-wrap gap-1">
+                    {QUICK_START_SLOTS.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                          startTime === s
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background hover:bg-muted border-border text-foreground"
+                        }`}
+                        onClick={() => setStartTime(s)}
+                      >
+                        {formatTime(s)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-          <div className="space-y-2">
-            <Label>Purpose</Label>
-            <Textarea required value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="e.g. Demo for batch 2026-Q2 trainees" />
-          </div>
-        </CardContent>
-      </Card>
+                {/* End time — manual input with auto suggestion */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between h-4">
+                    <Label>End Time</Label>
+                    {manualEndTime && (
+                      <button
+                        type="button"
+                        className="text-xs text-primary hover:underline leading-none"
+                        onClick={() => setManualEndTime(null)}
+                      >
+                        Reset to auto
+                      </button>
+                    )}
+                  </div>
+                  <Input
+                    type="time"
+                    min={autoEndTime.slice(0, 5)}
+                    max="18:30"
+                    value={endTime.slice(0, 5)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (!val) return;
+                      const newEnd = `${val}:00`;
+                      setManualEndTime(newEnd === autoEndTime ? null : newEnd);
+                    }}
+                    className={`h-9 ${manualEndTime ? "border-primary ring-1 ring-primary" : ""}`}
+                  />
+                  <div className="flex flex-wrap gap-1">
+                    {quickEndSlots.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                          endTime === s
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background hover:bg-muted border-border text-foreground"
+                        }`}
+                        onClick={() => setManualEndTime(s === autoEndTime ? null : s)}
+                      >
+                        {formatTime(s)}{s === autoEndTime ? " ★" : ""}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
 
-      {selectedCabin && fitsDay && validStart && purpose.trim() && (
-        <Card className="border-success/50 bg-success/5">
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-success" /> Confirm booking</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-              <div><div className="text-xs text-muted-foreground">Cabin</div><div className="font-medium">{selectedCabin.name}</div></div>
-              <div><div className="text-xs text-muted-foreground">Date</div><div className="font-medium">{dateStr}</div></div>
-              <div><div className="text-xs text-muted-foreground">Window</div><div className="font-medium">{formatTime(startTime)} – {formatTime(endTime)}</div></div>
-              <div><div className="text-xs text-muted-foreground">Candidates</div><div className="font-medium">{candidates} · {candidates * SLOT_MINUTES} min</div></div>
-            </div>
-            <Button className="w-full" onClick={submit} disabled={submitting}>
-              {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />} Confirm booking
+              {/* Validation alerts */}
+              {!fitsDay && (
+                <Alert icon={<AlertCircle className="h-4 w-4" />} variant="error">
+                  End time exceeds 18:30. Reduce candidates or choose an earlier start.
+                </Alert>
+              )}
+              {!validStart && (
+                <Alert icon={<AlertCircle className="h-4 w-4" />} variant="error">
+                  Start time must be in the future for today&apos;s bookings.
+                </Alert>
+              )}
+              {lunchOverlap && lunchSuggestion && (
+                <Alert icon={<Clock className="h-4 w-4" />} variant="warning">
+                  <div className="space-y-1">
+                    <p className="font-medium">Booking overlaps with lunch break ({LUNCH_START}–{LUNCH_END})</p>
+                    <p className="text-xs">
+                      Suggestions:{" "}
+                      {lunchSuggestion.beforeLunch && (
+                        <button
+                          type="button"
+                          className="text-primary underline underline-offset-2 mr-2"
+                          onClick={() => { setStartTime(`${lunchSuggestion.beforeLunch}:00`); setManualEndTime(null); }}
+                        >
+                          Start at {lunchSuggestion.beforeLunch}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="text-primary underline underline-offset-2"
+                        onClick={() => { setStartTime(`${lunchSuggestion.afterLunch}:00`); setManualEndTime(null); }}
+                      >
+                        Start after lunch ({lunchSuggestion.afterLunch})
+                      </button>
+                    </p>
+                  </div>
+                </Alert>
+              )}
+
+              {/* Cabin selection — only available cabins shown */}
+              <div className="space-y-2">
+                <Label>
+                  Cabin{" "}
+                  <span className="text-xs text-muted-foreground font-normal">(only available cabins shown)</span>
+                </Label>
+                <Select value={cabinId} onValueChange={setCabinId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder={
+                      availableCabins.length === 0
+                        ? "No cabins available for this slot"
+                        : "Select a cabin"
+                    } />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableCabins.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name} · Floor: {c.floor}{c.wing ? ` (${c.wing})` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Purpose</Label>
+                <Textarea
+                  required
+                  rows={3}
+                  value={purpose}
+                  onChange={(e) => setPurpose(e.target.value)}
+                  placeholder="e.g. Demo for batch 2026-Q2 trainees"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* ── Right: summary card ─────────────────────────────────── */}
+        <div className="lg:sticky lg:top-20">
+          <Card className={isFormValid ? "border-green-300 bg-green-50/40" : ""}>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                {isFormValid
+                  ? <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  : <Clock className="h-4 w-4 text-muted-foreground" />}
+                Booking Summary
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2.5">
+              <SummaryRow label="Manager" value={overrideName || profile?.full_name || "—"} />
+              <SummaryRow label="Employee ID" value={overrideEmployeeId || profile?.employee_id || "—"} />
+              <SummaryRow label="Department" value={overrideDepartment || profile?.department || "—"} />
+              <hr />
+              <SummaryRow label="Date" value={dateStr} />
+              <SummaryRow label="Candidates" value={String(candidates)} />
+              <SummaryRow label="Duration" value={durationMin > 0 ? formatDuration(durationMin) : "—"} />
+              <SummaryRow label="Start" value={formatTime12h(startTime)} />
+              <SummaryRow label="End" value={fitsDay ? formatTime12h(endTime) : "—"} />
+              <SummaryRow label="Cabin" value={selectedCabin?.name ?? "—"} />
+              {selectedCabin && (
+                <SummaryRow
+                  label="Floor"
+                  value={`${selectedCabin.floor}${selectedCabin.wing ? ` · ${selectedCabin.wing}` : ""}`}
+                />
+              )}
+              <hr />
+
+              {/* Checklist */}
+              <div className="space-y-1 pt-1">
+                <ChecklistItem ok={!!cabinId} label="Cabin selected" />
+                <ChecklistItem ok={!!purpose.trim()} label="Purpose provided" />
+                <ChecklistItem ok={fitsDay} label="Within 09:00–18:30" />
+                <ChecklistItem ok={validStart} label="Valid start time" />
+                <ChecklistItem ok={!lunchOverlap} label="No lunch conflict" />
+              </div>
+
+              <Button
+                className="w-full mt-1"
+                onClick={submit}
+                disabled={submitting || !isFormValid}
+              >
+                {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                {isFormValid ? "Confirm Booking" : "Complete the form"}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Small reusable components ────────────────────────────────────────────────
+
+function EditableTextField({
+  label, value, isEditing, onEdit, onSave, onCancel, onChange,
+}: {
+  label: string; value: string; isEditing: boolean;
+  onEdit: () => void; onSave: () => void; onCancel: () => void;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <Label className="text-xs text-muted-foreground">{label}</Label>
+        {!isEditing ? (
+          <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={onEdit}>
+            <Pencil className="h-3 w-3" />
+          </Button>
+        ) : (
+          <div className="flex gap-1">
+            <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={onSave}>
+              <CheckCircle2 className="h-3 w-3 text-green-600" />
             </Button>
-          </CardContent>
-        </Card>
+            <Button type="button" variant="ghost" size="icon" className="h-6 w-6" onClick={onCancel}>
+              <X className="h-3 w-3 text-destructive" />
+            </Button>
+          </div>
+        )}
+      </div>
+      {isEditing ? (
+        <Input autoFocus value={value} onChange={(e) => onChange(e.target.value)} className="h-8" />
+      ) : (
+        <div className="text-sm font-medium">{value || <span className="text-muted-foreground">—</span>}</div>
       )}
+    </div>
+  );
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between text-sm gap-2">
+      <span className="text-muted-foreground shrink-0">{label}</span>
+      <span className="font-medium text-right truncate">{value}</span>
+    </div>
+  );
+}
+
+function ChecklistItem({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <div className={`flex items-center gap-2 text-xs ${ok ? "text-green-700" : "text-muted-foreground"}`}>
+      <div className={`h-1.5 w-1.5 rounded-full shrink-0 ${ok ? "bg-green-500" : "bg-muted-foreground/30"}`} />
+      {label}
+    </div>
+  );
+}
+
+function Alert({
+  icon, variant, children,
+}: {
+  icon: React.ReactNode;
+  variant: "error" | "warning";
+  children: React.ReactNode;
+}) {
+  const cls =
+    variant === "error"
+      ? "border-destructive/30 bg-destructive/5 text-destructive"
+      : "border-orange-300 bg-orange-50 text-orange-800";
+  return (
+    <div className={`flex items-start gap-2 text-sm rounded-md border p-2.5 ${cls}`}>
+      <span className="shrink-0 mt-0.5">{icon}</span>
+      <div>{children}</div>
     </div>
   );
 }

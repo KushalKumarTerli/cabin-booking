@@ -62,8 +62,8 @@ export function AppShell() {
                 <Building className="h-4 w-4" />
               </div>
               <div className="flex flex-col group-data-[collapsible=icon]:hidden">
-                <span className="text-sm font-semibold">Cabin Booking</span>
-                <span className="text-xs text-muted-foreground">Internal</span>
+                <span className="text-sm font-semibold">Cabin Connect</span>
+                <span className="text-xs text-muted-foreground">Scheduling System</span>
               </div>
             </div>
           </SidebarHeader>
