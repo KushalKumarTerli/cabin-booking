@@ -161,3 +161,128 @@ export function formatDuration(minutes: number): string {
   if (m === 0) return `${h} hr`;
   return `${h} hr ${m} min`;
 }
+
+// ── Timeline utilities ───────────────────────────────────────────────────────
+
+export interface TimelineBooking {
+  start_time: string;
+  end_time: string;
+  status: string;
+  user_id?: string;
+  candidate_count?: number;
+}
+
+export interface TimelineSlot {
+  type: "available" | "booked";
+  start: string; // "HH:MM"
+  end: string;   // "HH:MM"
+  userId?: string;
+  candidateCount?: number;
+}
+
+/**
+ * Splits a cabin's working day (09:00–WORKING_END_EXTENDED) into a sorted
+ * sequence of available and booked slots based on its active bookings.
+ */
+export function getCabinTimeline(bookings: TimelineBooking[]): TimelineSlot[] {
+  const active = bookings
+    .filter((b) => b.status === "active")
+    .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+
+  const slots: TimelineSlot[] = [];
+  let cursor = timeToMinutes(WORKING_START);
+  const workEnd = timeToMinutes(WORKING_END_EXTENDED);
+
+  for (const bk of active) {
+    const bStart = timeToMinutes(bk.start_time);
+    const bEnd = Math.min(timeToMinutes(bk.end_time), workEnd);
+    if (bEnd <= cursor) continue; // entirely outside / already consumed
+
+    if (bStart > cursor) {
+      slots.push({ type: "available", start: minutesToShort(cursor), end: minutesToShort(bStart) });
+    }
+    slots.push({
+      type: "booked",
+      start: minutesToShort(Math.max(bStart, cursor)),
+      end: minutesToShort(bEnd),
+      userId: bk.user_id,
+      candidateCount: bk.candidate_count,
+    });
+    cursor = bEnd;
+  }
+
+  if (cursor < workEnd) {
+    slots.push({ type: "available", start: minutesToShort(cursor), end: minutesToShort(workEnd) });
+  }
+
+  return slots;
+}
+
+/**
+ * Like getCabinTimeline but only returns the current slot (if still running)
+ * and all future slots — completely past slots (endMin <= nowMin) are dropped.
+ * Use this for today's real-time view.
+ */
+export function getUpcomingTimeline(
+  bookings: TimelineBooking[],
+  nowMin: number,
+): TimelineSlot[] {
+  return getCabinTimeline(bookings).filter(
+    (slot) => timeToMinutes(slot.end) > nowMin,
+  );
+}
+
+/**
+ * Returns the earliest minute (as an integer) at which the cabin is free,
+ * starting from nowMin clamped to WORKING_START.
+ *
+ * - Cabin free right now  → returns nowMin (caller shows "Now")
+ * - Cabin currently booked → returns the end of that booking (exact time)
+ * - No working time left  → returns null (caller shows "Tomorrow 9:00 AM")
+ *
+ * The returned value is always either nowMin or a booking's exact end_time,
+ * so it is never a random mid-slot value.
+ */
+export function getNextAvailableSlot(
+  bookings: TimelineBooking[],
+  nowMin: number,
+): number | null {
+  const workStart = timeToMinutes(WORKING_START);
+  const workEnd = timeToMinutes(WORKING_END_EXTENDED);
+  let cursor = Math.max(nowMin, workStart);
+  if (cursor >= workEnd) return null;
+
+  const active = bookings
+    .filter((b) => b.status === "active")
+    .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+
+  for (const bk of active) {
+    const bStart = timeToMinutes(bk.start_time);
+    const bEnd = timeToMinutes(bk.end_time);
+    if (cursor < bStart) return cursor; // gap before this booking — free now
+    if (cursor < bEnd) cursor = bEnd;   // inside booking — skip to its end
+  }
+
+  return cursor < workEnd ? cursor : null;
+}
+
+/**
+ * Returns true if `managerId` already has an active booking on any cabin
+ * that overlaps [startTime, endTime) on the given booking list.
+ */
+export function hasManagerConflict(
+  allBookings: Array<{ user_id: string; start_time: string; end_time: string; status: string }>,
+  managerId: string,
+  startTime: string,
+  endTime: string,
+): boolean {
+  const reqStart = timeToMinutes(startTime);
+  const reqEnd = timeToMinutes(endTime);
+  return allBookings
+    .filter((b) => b.user_id === managerId && b.status === "active")
+    .some((b) => {
+      const bs = timeToMinutes(b.start_time);
+      const be = timeToMinutes(b.end_time);
+      return reqStart < be && reqEnd > bs;
+    });
+}

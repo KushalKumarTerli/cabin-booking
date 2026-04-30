@@ -5,7 +5,7 @@ import { useAuth } from "@/features/auth/AuthProvider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { toast } from "sonner";
+import { useNotification } from "@/hooks/use-notification";
 import { formatTime, todayISO } from "@/lib/booking-utils";
 
 export const Route = createFileRoute("/_authenticated/my-bookings")({
@@ -26,6 +26,7 @@ interface BookingRow {
 function MyBookings() {
   const { user } = useAuth();
   const qc = useQueryClient();
+  const notify = useNotification();
   const today = todayISO();
 
   const q = useQuery({
@@ -44,12 +45,18 @@ function MyBookings() {
   });
 
   const cancel = async (id: string) => {
+    const booking = (q.data ?? []).find((b) => b.id === id);
     const { error } = await supabase.from("bookings").update({ status: "cancelled" }).eq("id", id);
-    if (error) toast.error(error.message);
-    else {
-      toast.success("Booking cancelled");
-      qc.invalidateQueries({ queryKey: ["my-bookings"] });
-      qc.invalidateQueries({ queryKey: ["bookings"] });
+    if (error) {
+      notify.error(error.message);
+    } else {
+      notify.bookingCancelled({
+        cabinName: booking?.cabins?.name ?? "Cabin",
+        startTime: booking?.start_time ?? "00:00:00",
+        date: booking?.booking_date,
+      });
+      await qc.invalidateQueries({ queryKey: ["my-bookings"], refetchType: "all" });
+      await qc.invalidateQueries({ queryKey: ["bookings"], refetchType: "all" });
     }
   };
 

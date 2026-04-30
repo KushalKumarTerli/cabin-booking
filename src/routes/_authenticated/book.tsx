@@ -11,7 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { toast } from "sonner";
+import { useNotification } from "@/hooks/use-notification";
 import { Loader2, CheckCircle2, Pencil, X, AlertCircle, Clock } from "lucide-react";
 import {
   todayISO,
@@ -20,6 +20,7 @@ import {
   formatTime12h,
   formatDuration,
   timeToMinutes,
+  WORKING_START,
   WORKING_END_EXTENDED,
   overlapsLunch,
   getSuggestedSlotAroundLunch,
@@ -28,6 +29,7 @@ import {
   DEPARTMENTS,
   LUNCH_START,
   LUNCH_END,
+  hasManagerConflict,
 } from "@/lib/booking-utils";
 import { TimePicker } from "@/components/ui/time-picker";
 
@@ -43,13 +45,14 @@ export const Route = createFileRoute("/_authenticated/book")({
 });
 
 interface CabinRow { id: string; name: string; floor: string; wing: string | null; }
-interface BookingRow { cabin_id: string; start_time: string; end_time: string; status: string; }
+interface BookingRow { cabin_id: string; user_id: string; start_time: string; end_time: string; status: string; }
 
 function BookPage() {
   const search = Route.useSearch();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user, profile } = useAuth();
+  const notify = useNotification();
 
   const [date, setDate] = useState<"today" | "tomorrow">(
     search.date === tomorrowISO() ? "tomorrow" : "today",
@@ -57,6 +60,7 @@ function BookPage() {
   const dateStr = date === "today" ? todayISO() : tomorrowISO();
 
   const [candidates, setCandidates] = useState(1);
+  const [candidateRaw, setCandidateRaw] = useState("1");
   const [startTime, setStartTime] = useState<string>(() => {
     if (search.start) return search.start.length === 5 ? `${search.start}:00` : search.start;
     return date === "today" ? nowRoundedTo15() : "09:00:00";
@@ -100,7 +104,7 @@ function BookPage() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("bookings")
-        .select("cabin_id, start_time, end_time, status")
+        .select("cabin_id, user_id, start_time, end_time, status")
         .eq("booking_date", dateStr)
         .eq("status", "active");
       if (error) throw error;
@@ -129,10 +133,22 @@ function BookPage() {
     if (candidates > maxCandidates) setCandidates(maxCandidates);
   }, [startTime]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Keep raw display string in sync when candidates is clamped externally
+  useEffect(() => { setCandidateRaw(String(candidates)); }, [candidates]);
+
   const nowMin = (() => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); })();
   const validStart = date === "tomorrow" || timeToMinutes(startTime) >= nowMin;
   const lunchOverlap = fitsDay && overlapsLunch(startTime, endTime);
   const lunchSuggestion = lunchOverlap ? getSuggestedSlotAroundLunch(candidates) : null;
+
+  // A manager cannot hold bookings on multiple cabins at the same time
+  const managerConflict = useMemo(() => {
+    if (!user || !fitsDay) return false;
+    const otherCabinBookings = (bookingsQ.data ?? []).filter(
+      (b) => b.cabin_id !== cabinId, // exclude the cabin being booked (they wouldn't conflict with themselves)
+    );
+    return hasManagerConflict(otherCabinBookings, user.id, startTime, endTime);
+  }, [bookingsQ.data, user, startTime, endTime, cabinId, fitsDay]);
 
   const availableCabins = useMemo(() => {
     const cabins = cabinsQ.data ?? [];
@@ -154,7 +170,7 @@ function BookPage() {
   }, [availableCabins, cabinId]);
 
   const selectedCabin = availableCabins.find((c) => c.id === cabinId);
-  const isFormValid = !!cabinId && !!purpose.trim() && fitsDay && validStart && !lunchOverlap;
+  const isFormValid = !!cabinId && !!purpose.trim() && fitsDay && validStart && !lunchOverlap && !managerConflict;
   const durationMin = timeToMinutes(endTime) - timeToMinutes(startTime);
 
   const submit = async () => {
@@ -172,16 +188,21 @@ function BookPage() {
     setSubmitting(false);
     if (error) {
       if (error.message.includes("no_overlap_active") || error.code === "23P01") {
-        toast.error("This cabin was just booked for an overlapping slot. Pick another time or cabin.");
+        notify.bookingConflict();
       } else {
-        toast.error(error.message);
+        notify.error(error.message);
       }
-      qc.invalidateQueries({ queryKey: ["bookings"] });
+      await qc.invalidateQueries({ queryKey: ["bookings"], refetchType: "all" });
       return;
     }
-    toast.success("Booking confirmed!");
-    // Invalidate all booking-related queries so dashboard reflects the new booking instantly
-    await qc.invalidateQueries({ queryKey: ["bookings"] });
+    notify.bookingCreated({
+      cabinName: selectedCabin?.name ?? "Cabin",
+      startTime,
+      endTime,
+      date: dateStr,
+    });
+    await qc.invalidateQueries({ queryKey: ["bookings"], refetchType: "all" });
+    await qc.invalidateQueries({ queryKey: ["my-bookings"], refetchType: "all" });
     navigate({ to: "/my-bookings" });
   };
 
@@ -287,13 +308,23 @@ function BookPage() {
                       disabled={candidates <= 1}
                     >−</Button>
                     <Input
-                      type="number" min={1} max={maxCandidates}
-                      value={candidates}
+                      type="text"
+                      inputMode="numeric"
+                      value={candidateRaw}
                       onChange={(e) => {
-                        const v = parseInt(e.target.value, 10);
+                        const raw = e.target.value.replace(/\D/g, "").slice(0, 2);
+                        setCandidateRaw(raw);
+                        const v = parseInt(raw, 10);
                         if (!isNaN(v) && v >= 1 && v <= maxCandidates) setCandidates(v);
                       }}
-                      className="h-9 w-14 rounded-none text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      onBlur={() => {
+                        const v = parseInt(candidateRaw, 10);
+                        const clamped = isNaN(v) ? 1 : Math.min(maxCandidates, Math.max(1, v));
+                        setCandidates(clamped);
+                        setCandidateRaw(String(clamped));
+                      }}
+                      onFocus={(e) => e.target.select()}
+                      className="h-9 w-14 rounded-none text-center"
                     />
                     <Button
                       type="button" variant="outline" size="icon"
@@ -311,6 +342,8 @@ function BookPage() {
                   <TimePicker
                     value={startTime}
                     onChange={setStartTime}
+                    minTime={`${WORKING_START}:00`}
+                    maxTime={`${WORKING_END_EXTENDED}:00`}
                   />
                 </div>
 
@@ -331,6 +364,8 @@ function BookPage() {
                   <TimePicker
                     value={endTime}
                     onChange={(v) => setManualEndTime(v === autoEndTime ? null : v)}
+                    minTime={startTime}
+                    maxTime={`${WORKING_END_EXTENDED}:00`}
                     highlighted={!!manualEndTime}
                   />
                 </div>
@@ -371,6 +406,11 @@ function BookPage() {
                       </button>
                     </p>
                   </div>
+                </Alert>
+              )}
+              {managerConflict && (
+                <Alert icon={<AlertCircle className="h-4 w-4" />} variant="error">
+                  You already have an active booking in another cabin at this time. A manager cannot hold two simultaneous bookings.
                 </Alert>
               )}
 
@@ -449,6 +489,7 @@ function BookPage() {
                 <ChecklistItem ok={fitsDay} label="Within 09:00–19:00" />
                 <ChecklistItem ok={validStart} label="Valid start time" />
                 <ChecklistItem ok={!lunchOverlap} label="No lunch conflict" />
+                <ChecklistItem ok={!managerConflict} label="No simultaneous booking" />
               </div>
 
               <Button

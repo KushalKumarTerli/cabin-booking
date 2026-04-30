@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { toast } from "sonner";
+import { useNotification } from "@/hooks/use-notification";
 import { Pencil } from "lucide-react";
 import {
   formatTime,
@@ -37,9 +37,11 @@ interface BookingRow {
   status: "active" | "cancelled" | "overridden";
   purpose: string;
   cabin_id: string;
+  user_id: string;
   cabins: { name: string; floor: string } | null;
-  profiles: { full_name: string; department: string } | null;
 }
+
+interface ProfileRow { id: string; full_name: string; department: string; }
 
 interface EditState {
   id: string;
@@ -53,6 +55,7 @@ interface EditState {
 
 function AdminBookings() {
   const qc = useQueryClient();
+  const notify = useNotification();
   const [date, setDate] = useState("");
   const [status, setStatus] = useState<"all" | "active" | "cancelled" | "overridden">("all");
   const [editState, setEditState] = useState<EditState | null>(null);
@@ -63,7 +66,7 @@ function AdminBookings() {
     queryFn: async () => {
       let qy = supabase
         .from("bookings")
-        .select("id, booking_date, start_time, end_time, candidate_count, status, purpose, cabin_id, cabins(name, floor), profiles(full_name, department)")
+        .select("id, booking_date, start_time, end_time, candidate_count, status, purpose, cabin_id, user_id, cabins(name, floor)")
         .order("booking_date", { ascending: false })
         .order("start_time")
         .limit(200);
@@ -75,6 +78,31 @@ function AdminBookings() {
     },
   });
 
+  const userIds = useMemo(
+    () => [...new Set((q.data ?? []).map((b) => b.user_id))].sort(),
+    [q.data],
+  );
+
+  const profilesQ = useQuery({
+    queryKey: ["profiles", "by-ids", userIds.join(",")],
+    enabled: userIds.length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, full_name, department")
+        .in("id", userIds);
+      if (error) throw error;
+      return data as ProfileRow[];
+    },
+    staleTime: 60_000,
+  });
+
+  const profileMap = useMemo(() => {
+    const map = new Map<string, ProfileRow>();
+    (profilesQ.data ?? []).forEach((p) => map.set(p.id, p));
+    return map;
+  }, [profilesQ.data]);
+
   const cabinsQ = useQuery({
     queryKey: ["cabins", "active"],
     queryFn: async () => {
@@ -85,21 +113,25 @@ function AdminBookings() {
   });
 
   const setStatusFor = async (id: string, newStatus: "cancelled" | "overridden") => {
+    const booking = (q.data ?? []).find((b) => b.id === id);
     const { error } = await supabase.from("bookings").update({ status: newStatus }).eq("id", id);
-    if (error) toast.error(error.message);
-    else {
-      toast.success(`Booking ${newStatus}`);
-      qc.invalidateQueries({ queryKey: ["admin-bookings"] });
-      qc.invalidateQueries({ queryKey: ["bookings"] });
+    if (error) {
+      notify.error(error.message);
+    } else {
+      notify.adminAction(newStatus, booking?.cabins?.name ?? "Cabin", booking?.start_time);
+      await qc.invalidateQueries({ queryKey: ["admin-bookings"], refetchType: "all" });
+      await qc.invalidateQueries({ queryKey: ["bookings"], refetchType: "all" });
     }
   };
 
   const remove = async (id: string) => {
     if (!confirm("Permanently delete this booking?")) return;
+    const booking = (q.data ?? []).find((b) => b.id === id);
     const { error } = await supabase.from("bookings").delete().eq("id", id);
-    if (error) toast.error(error.message);
-    else {
-      toast.success("Deleted");
+    if (error) {
+      notify.error(error.message);
+    } else {
+      notify.adminAction("deleted", booking?.cabins?.name ?? "Cabin", booking?.start_time);
       qc.invalidateQueries({ queryKey: ["admin-bookings"] });
     }
   };
@@ -129,15 +161,20 @@ function AdminBookings() {
     setSaving(false);
     if (error) {
       if (error.message.includes("no_overlap_active") || error.code === "23P01") {
-        toast.error("Time slot conflicts with another active booking for this cabin.");
+        notify.error("Time slot conflicts with another active booking for this cabin.");
       } else {
-        toast.error(error.message);
+        notify.error(error.message);
       }
     } else {
-      toast.success("Booking updated");
+      const cabin = (cabinsQ.data ?? []).find((c) => c.id === editState.cabin_id);
+      notify.bookingUpdated({
+        cabinName: cabin?.name ?? "Cabin",
+        startTime: editState.start_time,
+        endTime: editState.end_time,
+      });
       setEditState(null);
-      qc.invalidateQueries({ queryKey: ["admin-bookings"] });
-      qc.invalidateQueries({ queryKey: ["bookings"] });
+      await qc.invalidateQueries({ queryKey: ["admin-bookings"], refetchType: "all" });
+      await qc.invalidateQueries({ queryKey: ["bookings"], refetchType: "all" });
     }
   };
 
@@ -201,7 +238,7 @@ function AdminBookings() {
                     {b.booking_date} · {formatTime(b.start_time)}–{formatTime(b.end_time)} · {b.candidate_count} candidate(s)
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    By {b.profiles?.full_name} ({b.profiles?.department})
+                    By {profileMap.get(b.user_id)?.full_name ?? "—"} ({profileMap.get(b.user_id)?.department ?? "—"})
                   </div>
                   <div className="text-xs text-muted-foreground italic truncate max-w-sm">{b.purpose}</div>
                 </div>

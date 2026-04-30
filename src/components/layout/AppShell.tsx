@@ -27,6 +27,8 @@ import {
   Building,
 } from "lucide-react";
 import { useAuth } from "@/features/auth/AuthProvider";
+import { NotificationProvider } from "@/features/notifications/NotificationContext";
+import { NotificationBell } from "@/features/notifications/NotificationBell";
 
 const managerItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
@@ -53,6 +55,7 @@ export function AppShell() {
   };
 
   return (
+    <NotificationProvider>
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-muted/30">
         <Sidebar collapsible="icon">
@@ -126,6 +129,7 @@ export function AppShell() {
                 Admin
               </span>
             )}
+            <NotificationBell />
           </header>
           <main className="flex-1 p-4 md:p-6">
             <Outlet />
@@ -133,5 +137,6 @@ export function AppShell() {
         </div>
       </div>
     </SidebarProvider>
+    </NotificationProvider>
   );
 }
